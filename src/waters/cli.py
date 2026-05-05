@@ -356,7 +356,7 @@ def _decide_phase(run_id: str, base_branch: str, workers) -> None:
                 )
             return
         if choice == "p":
-            _do_pick(run_id, workers)
+            _do_pick(run_id, summary)
             _maybe_cleanup(run_id)
             return
         if choice == "k":
@@ -397,7 +397,9 @@ def _do_merge(run_id: str, base_branch: str, non_empty_workers) -> bool:
     return result.returncode == 0
 
 
-def _do_pick(run_id: str, workers) -> None:
+def _do_pick(run_id: str, summary) -> None:
+    line_counts = {w.index: lc for w, lc in summary}
+    workers = [w for w, _ in summary]
     valid = {w.index for w in workers}
     while True:
         choice = input(f"agent number (1-{len(workers)}): ").strip()
@@ -410,6 +412,12 @@ def _do_pick(run_id: str, workers) -> None:
             print("no such agent")
             continue
         match = next(w for w in workers if w.index == idx)
+        if line_counts[idx] == 0:
+            if not _ask_yes_no(
+                f"{match.name} has 0 diff lines (empty) — pick anyway?",
+                default=False,
+            ):
+                continue
         branch = f"waters/{run_id}/{match.name}"
         subprocess.run(
             [str(paths.script_path("pick.sh")), run_id, branch],
