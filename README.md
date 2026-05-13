@@ -34,6 +34,35 @@ or alias it in your shell:
 alias waters='uv run --project ~/repos_fun/waters waters'
 ```
 
+## Shared prompts directory (`WATERS_PROMPTS_DIR`)
+
+Waters can symlink a fixed directory of yours into every worktree as `waters_prompts/`, so agents can read prompts and write planning/decision files to a single shared location without anything ever entering your repo's git history.
+
+**Configure** an absolute path either via env var or via `~/.config/waters/.env`:
+
+```bash
+# ~/.config/waters/.env
+WATERS_PROMPTS_DIR=/Users/you/watersp
+```
+
+The path **must be absolute** (relative paths break across worktrees, which run from different cwds). `~` is expanded.
+
+**What waters does** when `WATERS_PROMPTS_DIR` is set:
+
+1. After creating each worktree, symlinks `<worktree>/waters_prompts` → your configured directory.
+2. Appends `/waters_prompts` to the repo's shared `.git/info/exclude` (idempotent), so git ignores the symlink in every worktree without you having to touch `.gitignore`.
+
+If `WATERS_PROMPTS_DIR` is unset, this whole mechanism is skipped — waters runs as before.
+
+### Contract for agents running inside a worktree
+
+`waters_prompts/` inside a worktree is a real-on-disk directory (via symlink) that the agent may treat as part of the repo for **read and write** purposes:
+
+- **Read** anything under `waters_prompts/` — prompts, prior decisions, plans, notes — as if it were a normal subtree of the repo.
+- **Write** anything under `waters_prompts/` — new planning files, decision records, intermediate scratch — and trust that those writes persist to the shared central directory immediately.
+- These writes will **not** appear in `git status`, **not** be part of any commit, and **not** propagate via the worktree's branch or any merge. Only changes to actual repo files become real code changes.
+- Other concurrently-running waters worktrees share the same backing directory, so writes are visible across agents. Use distinct filenames (e.g. include `<{i}>` in the path) to avoid clobbering.
+
 ## Quick start
 
 Write a prompt file `task.md`:

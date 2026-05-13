@@ -1,2 +1,4 @@
 PLAN.md
 RECOVER.md
+__pycache__/
+*.pyc

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
-from . import directives, orchestrator, paths
+from . import config, defaults, directives, orchestrator, paths
 
 
 def main() -> None:
@@ -38,11 +38,11 @@ def _run(argv: list[str]) -> None:
     base_branch = _current_branch()
     base_repo = str(Path.cwd().resolve())
 
+    _ensure_prompt_defaults(args.prompt_files)
+
     configs = []
     for p in args.prompt_files:
         path = Path(p).resolve()
-        if not path.exists():
-            _die(f"prompt file not found: {p}")
         try:
             configs.append(directives.parse_prompt_file(path))
         except ValueError as e:
@@ -69,6 +69,8 @@ def _run(argv: list[str]) -> None:
         [str(paths.script_path("setup.sh")), run_id, base_branch, str(len(workers))],
         check=True,
     )
+
+    _link_prompts_into_worktrees(run_id, workers)
 
     sess = orchestrator.session_name(run_id)
     print(f"\nLaunching tmux session: {sess}")
@@ -136,6 +138,16 @@ def _resume(run_id: str) -> None:
 
     _finalize_run(run_id, base_branch, workers)
     _decide_phase(run_id, base_branch, workers)
+
+
+def _ensure_prompt_defaults(prompt_files: list[str]) -> None:
+    for p in prompt_files:
+        path = Path(p).resolve()
+        if not path.exists():
+            _die(f"prompt file not found: {p}")
+        inserted = defaults.ensure_defaults(path)
+        if inserted:
+            print(f"{p}: inserted defaults [{', '.join(inserted)}]")
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -305,6 +317,51 @@ def _git_status_short(worktree: Path) -> list[str]:
     if result.returncode != 0:
         return []
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _link_prompts_into_worktrees(run_id: str, workers) -> None:
+    """Symlink ``waters_prompts/`` in each worktree to ``WATERS_PROMPTS_DIR``
+    and add it to ``info/exclude`` so git never tracks it. Skipped silently
+    if no prompts dir is configured."""
+    try:
+        prompts_dir = config.load_prompts_dir()
+    except ValueError as e:
+        _die(str(e))
+    if prompts_dir is None:
+        return
+
+    _add_to_git_exclude(config.SYMLINK_NAME)
+
+    for w in workers:
+        wt = paths.worktree_dir(run_id, w.index)
+        link = wt / config.SYMLINK_NAME
+        if link.is_symlink() or link.exists():
+            _die(
+                f"{link} already exists; refusing to overwrite. If a previous "
+                f"{config.SYMLINK_NAME!r} was committed to the base branch, "
+                f"untrack it before running waters."
+            )
+        link.symlink_to(prompts_dir, target_is_directory=True)
+
+    print(f"Linked {config.SYMLINK_NAME}/ -> {prompts_dir} in each worktree")
+
+
+def _add_to_git_exclude(entry: str) -> None:
+    """Append ``/entry`` to the repo's shared ``info/exclude`` if missing.
+    Shared across worktrees via ``git rev-parse --git-common-dir``."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    )
+    exclude_path = Path(result.stdout.strip()) / "info" / "exclude"
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    rooted = f"/{entry}"
+    existing = exclude_path.read_text() if exclude_path.exists() else ""
+    if any(line.strip() == rooted or line.strip() == entry
+           for line in existing.splitlines()):
+        return
+    suffix = "" if not existing or existing.endswith("\n") else "\n"
+    exclude_path.write_text(existing + suffix + rooted + "\n")
 
 
 def _finalize_run(run_id: str, base_branch: str, workers) -> None:
